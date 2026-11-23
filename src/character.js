@@ -150,9 +150,11 @@ export function makeCharacter(look = {}) {
   return g;
 }
 
-export function animateCharacter(c, { walking = false, phase = 0, seated = false, wave = false, talk = false, cheer = false, cook = false, hold = false, grab = false }, now) {
+export function animateCharacter(c, { walking = false, phase = 0, seated = false, wave = false, talk = false, cheer = false, cook = false, hold = false, grab = false, lie = false }, now) {
   const p = c.userData.parts;
   if (!p) return;
+  if (c.userData.cup) { c.userData.cup.visible = hold; if (hold) c.userData.cup.position.y = 0.86 + Math.max(0, Math.sin(now / 1600)) * 0.12; }
+  if (lie) { p.legs.forEach((l) => { l.rotation.x = 0; }); p.arms.forEach((a) => { a.rotation.x = 0.05; }); p.head.rotation.z = 0; p.head.position.y = 1.18; return; }
   const sw = walking ? Math.sin(phase) * 0.6 : 0;
   if (seated) { p.legs.forEach((l) => { l.rotation.x = -1.4; }); }
   else { p.legs[0].rotation.x = sw; p.legs[1].rotation.x = -sw; }
@@ -245,3 +247,14 @@ export function randomScholar(r = Math.random) {
 }
 export const scholarName = (r = Math.random) => `${pick(SCHOLAR_ADJ, r)} ${pick(SCHOLAR_N, r)}`;
 export const HUNJANG_LOOK = { skin: '#efc49c', hair: '#e8e4dc', hairStyle: 'bun', outfit: '#f6f3ea', robe: true, belt: '#3b5b92', accessory: 'gat', beard: '#efece6', eyes: 'line', height: 1.06 };
+
+// 찻잔 (hold 상태에서 보임)
+export function addCup(c) {
+  if (c.userData.cup) return;
+  const g = new THREE.Group();
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.055, 0.1, 16), new THREE.MeshStandardMaterial({ color: '#a9cbb7', roughness: 0.25 }));
+  const tea = new THREE.Mesh(new THREE.CircleGeometry(0.068, 16), new THREE.MeshStandardMaterial({ color: '#b8862a', roughness: 0.3 }));
+  tea.rotation.x = -Math.PI / 2; tea.position.y = 0.045;
+  g.add(cup, tea); g.position.set(0, 0.86, 0.36); g.visible = false;
+  c.add(g); c.userData.cup = g;
+}

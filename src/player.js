@@ -1,7 +1,8 @@
 // 내 유생 캐릭터(3인칭) · 다른 유생(원격·NPC) · 입력
 import * as THREE from 'three';
 import { makeCharacter, animateCharacter, nameSprite, bubbleSprite } from './character.js';
-import { walkable, heightAt, COLLIDERS, BOXES, FLOOR_Y } from './scene.js';
+import { walkable, heightAt, COLLIDERS, BOXES, FLOOR_Y, PAVILION } from './scene.js';
+import { addCup } from './character.js';
 
 const wrap = (a) => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
 const SIT_DROP = 0.3; // 바닥(방석)에 앉을 때 몸을 내리는 양
@@ -32,7 +33,7 @@ export class Player {
   setLook(look) {
     this.look = look;
     if (this.body) this.group.remove(this.body);
-    this.body = makeCharacter(look); this.group.add(this.body);
+    this.body = makeCharacter(look); addCup(this.body); this.group.add(this.body); this.group.rotation.order = 'YXZ';
     if (this.tag) this.group.remove(this.tag);
     this.tag = nameSprite(this.name, { bg: 'rgba(255,196,90,0.88)', fg: '#2a1800', scale: 0.85 });
     this.tag.position.y = 1.95; this.group.add(this.tag);
@@ -58,14 +59,22 @@ export class Player {
       });
     }
   }
-  sitAt(seat) { this.seat = seat; this.pos.set(seat.x, 0, seat.z); this.facing = 0; this.freeLook = false; }
-  stand() { if (!this.seat) return; const s = this.seat; this.seat = null; this.pos.set(s.x + (s.x > 0 ? -1.2 : 1.2) * 0, 0, s.z - 0.75); this.focus = false; }
-
+  // seat: { x, z, y?, facing?, kind: 'hall' | 'tea' }
+  sitAt(seat) { this.bed = null; this.seat = seat; this.pos.set(seat.x, 0, seat.z); this.facing = seat.facing ?? 0; this.group.rotation.y = this.facing; this.freeLook = false; }
+  sleepAt(bed) { this.seat = null; this.bed = bed; this.freeLook = false; this.pos.set(bed.footX, bed.y + 0.24, bed.z); }
+  stand() {
+    const s = this.seat, b = this.bed;
+    if (b) { this.bed = null; this.pos.set(b.door.x, 0, b.door.z); this.facing = b.s > 0 ? -Math.PI / 2 : Math.PI / 2; }
+    else if (s && s.kind === 'tea') { this.seat = null; this.pos.set(PAVILION.x - 2.6, 0, PAVILION.z + (s.z - PAVILION.z) * 0.6); this.facing = -Math.PI / 2; }
+    else if (s) { this.seat = null; this.pos.set(s.x, 0, s.z - 0.75); }
+    this.focus = false; this.hold = false;
+    this.group.rotation.x = 0;
+  }
   update(dt, input, camera, now) {
     let mx = input.x, mz = input.y;
     const len = Math.hypot(mx, mz);
     this.walking = false;
-    if (!this.seat && len > 0.05) {
+    if (!this.seat && !this.bed && len > 0.05) {
       mx /= Math.max(1, len); mz /= Math.max(1, len);
       const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
       const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
@@ -78,29 +87,40 @@ export class Player {
       this.facing = Math.atan2(dir.x, dir.z); this.walking = true;
       this.phase += dt * (input.run ? 12 : 8.5);
     }
-    if (!this.seat) this.resolveCollisions();
+    if (!this.seat && !this.bed) this.resolveCollisions();
     const gy = heightAt(this.pos.x, this.pos.z);
-    this.pos.y += ((this.seat ? FLOOR_Y - SIT_DROP : gy) - this.pos.y) * Math.min(1, dt * 14);
-    const cur = this.group.rotation.y;
-    this.group.rotation.y = cur + wrap(this.facing - cur) * Math.min(1, dt * 10);
+    const wantY = this.bed ? this.bed.y + 0.24 : this.seat ? (this.seat.y ?? FLOOR_Y) - SIT_DROP : gy;
+    this.pos.y += (wantY - this.pos.y) * Math.min(1, dt * 14);
+    if (this.bed) { this.group.rotation.set(-Math.PI / 2, this.bed.yaw, 0); }
+    else {
+      this.group.rotation.x = 0;
+      const cur = this.group.rotation.y;
+      this.group.rotation.y = cur + wrap(this.facing - cur) * Math.min(1, dt * 10);
+    }
     if (this.wave > 0) this.wave -= dt;
-    animateCharacter(this.body, { walking: this.walking, phase: this.phase, seated: !!this.seat, wave: this.wave > 0, talk: this.reading }, now);
+    animateCharacter(this.body, { walking: this.walking, phase: this.phase, seated: !!this.seat, wave: this.wave > 0, talk: this.reading, hold: this.hold, lie: !!this.bed }, now);
     this.marker.position.set(this.pos.x, this.pos.y + 2.2 + Math.sin(now / 250) * 0.05, this.pos.z);
-    this.marker.visible = !this.seat;
+    this.marker.visible = !this.seat && !this.bed;
     this.body.visible = !(this.seat && this.focus && !this.freeLook); // 집중 모드: 내 눈으로 책상을 봄
-    this.tag.visible = !this.seat;
+    this.tag.visible = !this.seat && !this.bed;
     tickBubble(this, now);
 
     // 카메라: 앉으면 어깨 너머로 책상과 마당이 보이게
-    if (this.seat && !this.freeLook) {
-      const want = this.focus ? { yaw: Math.PI, pitch: 0.72, dist: 1.55 } : { yaw: Math.PI + 0.5, pitch: 0.55, dist: 3.4 };
+    const sf = this.seat ? (this.seat.facing ?? 0) : 0;
+    const sdir = new THREE.Vector3(Math.sin(sf), 0, Math.cos(sf));
+    if ((this.seat || this.bed) && !this.freeLook) {
+      const want = this.bed ? { yaw: -this.bed.s * Math.PI / 2 - 0.25, pitch: 0.5, dist: 2.7 }
+        : this.focus ? { yaw: sf + Math.PI, pitch: 0.72, dist: 1.55 }
+        : this.seat.kind === 'tea' ? { yaw: sf + Math.PI + 0.95, pitch: 0.34, dist: 2.7 } : { yaw: sf + Math.PI + 0.5, pitch: 0.55, dist: 3.4 };
       this.yaw += wrap(want.yaw - this.yaw) * Math.min(1, dt * 2.5);
       this.pitch += (want.pitch - this.pitch) * Math.min(1, dt * 2);
       this.dist += (want.dist - this.dist) * Math.min(1, dt * 2);
     }
-    const target = this.seat
-      ? (this.focus ? new THREE.Vector3(this.pos.x, FLOOR_Y + 0.37, this.pos.z + 0.95) : new THREE.Vector3(this.pos.x, FLOOR_Y + 0.9, this.pos.z + 1.7))
-      : new THREE.Vector3(this.pos.x, this.pos.y + 1.3, this.pos.z);
+    const sy = this.seat ? (this.seat.y ?? FLOOR_Y) : 0;
+    const target = this.bed ? new THREE.Vector3(this.bed.x, this.bed.y + 0.3, this.bed.z)
+      : this.seat
+        ? (this.focus ? new THREE.Vector3(this.pos.x, sy + 0.37, this.pos.z).addScaledVector(sdir, 0.95) : (this.seat.kind === 'tea' ? new THREE.Vector3(PAVILION.x, sy + 0.75, PAVILION.z) : new THREE.Vector3(this.pos.x, sy + 0.9, this.pos.z).addScaledVector(sdir, 1.7)))
+        : new THREE.Vector3(this.pos.x, this.pos.y + 1.3, this.pos.z);
     const off = new THREE.Vector3(Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), Math.cos(this.yaw) * Math.cos(this.pitch)).multiplyScalar(this.dist);
     const cam = target.clone().add(off);
     cam.y = Math.max(cam.y, heightAt(cam.x, cam.z) + 0.4);
@@ -126,7 +146,7 @@ export class Avatar {
     this.lookKey = key; this.name = name;
     if (this.body) this.group.remove(this.body);
     if (this.tag) this.group.remove(this.tag);
-    this.body = makeCharacter(look); this.group.add(this.body);
+    this.body = makeCharacter(look); addCup(this.body); this.group.add(this.body); this.group.rotation.order = 'YXZ';
     this.tag = nameSprite(name, { bg: this.tagColor || (bot ? 'rgba(40,36,48,0.55)' : 'rgba(20,16,40,0.78)'), scale: 0.78 });
     this.tag.position.y = 1.92; this.group.add(this.tag);
   }
@@ -145,14 +165,23 @@ export class Avatar {
       const o = THREE.MathUtils.clamp(d < 3.8 ? 0 : d < 5 ? (d - 3.8) / 1.2 : 1 - (d - 16) / 10, 0, 1);
       this.tag.material.opacity = o; if (this.status) this.status.material.opacity = o;
     }
-    const y = st.seated ? FLOOR_Y - SIT_DROP : heightAt(st.x, st.z);
+    if (st.lie) { // 이부자리에 누움
+      this.group.position.set(st.lie.footX, st.lie.y + 0.24, st.lie.z);
+      this.group.rotation.set(-Math.PI / 2, st.lie.yaw, 0);
+      animateCharacter(this.body, { lie: true }, now);
+      this.tag.visible = false; if (this.status) this.status.position.set(0, 1.0, 0.75);
+      return;
+    }
+    this.tag.visible = true; if (this.status) this.status.position.set(0, 2.22, 0);
+    this.group.rotation.x = 0;
+    const y = st.seated ? (st.sitY ?? FLOOR_Y) - SIT_DROP : heightAt(st.x, st.z);
     this.target.set(st.x, y, st.z);
     const dxz = Math.hypot(this.target.x - this.group.position.x, this.target.z - this.group.position.z);
     const walking = !st.seated && dxz > 0.04;
     if (dxz > 8) this.group.position.copy(this.target);
     else { const k = Math.min(1, dt * (st.speed || 6)); this.group.position.x += (this.target.x - this.group.position.x) * k; this.group.position.z += (this.target.z - this.group.position.z) * k; this.group.position.y += (y - this.group.position.y) * Math.min(1, dt * 10); }
     if (walking) { this.phase += dt * 8.5; this.facing = Math.atan2(this.target.x - this.group.position.x, this.target.z - this.group.position.z); }
-    if (st.seated) this.facing = 0; else if (st.facing !== undefined && !walking) this.facing = st.facing;
+    if (st.seated) this.facing = st.facing ?? 0; else if (st.facing !== undefined && !walking) this.facing = st.facing;
     const cur = this.group.rotation.y;
     this.group.rotation.y = cur + wrap(this.facing - cur) * Math.min(1, dt * 8);
     animateCharacter(this.body, { walking, phase: this.phase, seated: st.seated, wave: st.wave, talk: st.talk, hold: st.hold }, now);

@@ -92,6 +92,42 @@
     </div>
   </div>
 
+  <!-- 정자: 차 -->
+  <div id="tea-card" class="card dock hidden">
+    <div class="dock-h"><b class="serif">정자에서 차 한 잔</b><span class="muted tiny">茶亭</span></div>
+    <div id="tea-say" class="say plain"></div>
+    <div id="tea-menu" class="seg">
+      <button data-t="녹차">🍵 녹차</button><button data-t="보리차">🌾 보리차</button><button data-t="유자차">🍋 유자차</button>
+      <button data-t="대추차">🫖 대추차</button><button data-t="국화차">🌼 국화차</button><button data-t="쌍화차">🥮 쌍화차</button>
+    </div>
+    <div class="row end">
+      <button id="tea-ask" class="ghost">🙇 훈장님께 여쭙기</button>
+      <button id="tea-leave" class="primary">일어나기</button>
+    </div>
+  </div>
+
+  <!-- 동재·서재: 낮잠 -->
+  <div id="nap-card" class="card dock hidden">
+    <div class="dock-h"><b class="serif">낮잠 자기</b><span class="muted tiny" id="nap-label"></span></div>
+    <p class="tiny muted" style="margin:0">이부자리에 누워 쉬어요. 시간이 되면 풍경 소리 알람으로 깨워줘요.</p>
+    <div class="seg" id="nap-lens">
+      <button data-m="10">10분</button><button data-m="20" class="on">20분</button><button data-m="30">30분</button><button data-m="custom">직접</button>
+    </div>
+    <input id="nap-custom" class="hidden" type="number" min="1" max="120" value="15" inputmode="numeric" />
+    <div class="row end">
+      <button id="nap-cancel" class="ghost">취소</button>
+      <button id="nap-start" class="primary">🛏️ 눕기</button>
+    </div>
+  </div>
+  <div id="sleep" class="sleep hidden">
+    <div class="card sleep-card">
+      <div id="sleep-title" class="serif sleep-t">쿨쿨…</div>
+      <div id="sleep-time" class="serif sleep-time">20:00</div>
+      <p class="tiny muted">다른 창으로 가도 알람은 울려요 · 휴대폰은 화면이 꺼지면 멈출 수 있어요</p>
+      <button id="wake" class="primary">☀️ 일어나기</button>
+    </div>
+  </div>
+
   <!-- 쉬는 시간 대화 -->
   <form id="chatbar" class="chatbar hidden" autocomplete="off">
     <input id="chat" maxlength="60" placeholder="쉬는 시간 한마디 (공부 중엔 꺼져요)" />
@@ -125,6 +161,15 @@
       <div class="dock-h"><b class="serif">오늘의 일과 두루마리</b><button class="ghost small x">닫기</button></div>
       <canvas id="journal-canvas" width="900" height="1200"></canvas>
       <div class="row end"><a id="journal-dl" class="primary small" download="일과두루마리.png">이미지로 저장</a></div>
+    </div>
+  </div>
+
+  <!-- 존경각 -->
+  <div id="library-modal" class="overlay hidden">
+    <div class="card modal">
+      <div class="dock-h"><b class="serif">존경각 · 지난 두루마리</b><button id="lib-close" class="ghost small">닫기</button></div>
+      <p id="lib-sum" class="muted tiny"></p>
+      <div id="lib-list" class="lib-list"></div>
     </div>
   </div>
 

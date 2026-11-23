@@ -8,12 +8,12 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { buildWorld, realTheme, softDot, SEATS, FLOOR_Y, SPAWN, TIMES, SEASONS } from './scene.js';
+import { buildWorld, realTheme, softDot, SEATS, FLOOR_Y, SPAWN, TIMES, SEASONS, TEA_SEATS, BEDS, PAVILION, LIBRARY } from './scene.js';
 import { ROBES, HUNJANG_LOOK, scholarName } from './character.js';
 import { Player, Avatar, createInput } from './player.js';
 import { connect, botScholars, botLine, bellPhase, kst, ONLINE_CAPABLE } from './net.js';
 import { hunjang, cleanChat, makeTheme } from './ai.js';
-import { startAudio, setAmbience, tickAmbience, bell as bellSound, chime, strike, pop, toggleSound, setVolume, VOL } from './audio.js';
+import { startAudio, setAmbience, tickAmbience, bell as bellSound, strike, pop, toggleSound, setVolume, VOL, scheduleAlarm } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
@@ -71,12 +71,12 @@ const todayLog = () => (mem.days[today()] = mem.days[today()] || []);
 const me = {
   id: Math.random().toString(36).slice(2, 10), joinedAt: Date.now(),
   name: mem.name || scholarName(), robe: mem.robe || ROBES[2], hat: mem.hat || 'yugeon',
-  seat: null, state: 'walk', goal: '', startAt: 0, endAt: 0, mins: 0, sync: false,
+  seat: null, tea: null, bed: null, drink: '', wakeAt: 0, state: 'walk', goal: '', startAt: 0, endAt: 0, mins: 0, sync: false,
   get look() { return { skin: mem.skin || '#f2c9a0', hair: '#2b1d14', hairStyle: this.hat === 'none' ? 'bun' : 'short', outfit: this.robe, robe: true, belt: this.robe === '#c92a2a' ? '#1c3d6e' : '#c92a2a', accessory: this.hat, accessoryColor: '#1d1b22' }; },
   get done() { return todayLog().filter((s) => s.full).length; },
   public() {
     const p = player ? player.pos : SPAWN;
-    return { id: this.id, name: this.name, look: this.look, seat: this.seat, x: +p.x.toFixed(2), z: +p.z.toFixed(2), state: this.state, goal: this.state === 'study' ? this.goal : '', endAt: this.state === 'study' ? this.endAt : 0, done: this.done, theme: themeUntil > Date.now() ? { ...theme, until: themeUntil } : null };
+    return { id: this.id, name: this.name, look: this.look, seat: this.seat, tea: this.tea, bed: this.bed, drink: this.tea != null ? this.drink : '', wakeAt: this.bed != null ? this.wakeAt : 0, x: +p.x.toFixed(2), z: +p.z.toFixed(2), state: this.state, goal: this.state === 'study' ? this.goal : '', endAt: this.state === 'study' ? this.endAt : 0, done: this.done, theme: themeUntil > Date.now() ? { ...theme, until: themeUntil } : null };
   },
 };
 let player = null, input = null, net = null, entered = false;
@@ -109,13 +109,13 @@ function enter() {
     onTheme: (t, by) => { if (!t || !t.until || t.until < Date.now() || t.until <= themeUntil) return; themeUntil = t.until; const name = net.peers.get(by)?.name || '누군가'; applyTheme(t, { by: name }); },
     onLantern: ({ id, name }) => { if (id === me.id) return; toast(`🏮 ${cleanChat(name, 12)}님이 향 하나를 다 태웠어요 · 등불이 켜졌어요`); flashLantern(); },
   });
-  setInterval(() => net.update(), 2000);
+  setInterval(() => net.update(), 5000); // 위치가 크게 바뀌었을 때만 실제로 보냄
   hjGreet();
 }
 function onStatus(s) {
   const el = $('status');
   if (!ONLINE_CAPABLE) { el.textContent = '🌙 혼자 미리보기 · NPC 유생과 함께'; return; }
-  if (s.error) { el.textContent = '⚠️ 연결 끊김 · 새로고침해 주세요'; el.title = s.error; return; }
+  if (s.error) { el.textContent = s.retrying ? '🔄 다시 연결하는 중…' : '⚠️ 연결 끊김 · 새로고침해 주세요'; el.title = s.error; return; }
   el.textContent = s.online ? `🟢 ${s.room}번 서원 · 접속 ${s.count || 1}명` : '연결 중…';
 }
 
@@ -128,17 +128,25 @@ function hint(msg, ms = 9000) { const h = $('hint'); h.textContent = msg; h.styl
 // ---------------- 다른 유생들 ----------------
 const avatars = new Map(); // id -> Avatar (실제 사람 + NPC)
 let bots = [], botsAt = 0, lastLineSlot = -1;
+function takenTea() { const s = new Set([0]); if (me.tea != null) s.add(me.tea); net?.peers.forEach((p) => { if (p.tea != null) s.add(p.tea); }); return s; }
+function takenBeds() { const s = new Set(); if (me.bed != null) s.add(me.bed); net?.peers.forEach((p) => { if (p.bed != null) s.add(p.bed); }); return s; }
+function usedBeds() { const s = takenBeds(); bots.forEach((b) => { if (b.bed != null) s.add(b.bed); }); return s; }
+function usedTea() { const s = takenTea(); bots.forEach((b) => { if (b.tea != null) s.add(b.tea); }); return s; }
 function takenSeats() { const s = new Set(); if (me.seat !== null) s.add(me.seat); net?.peers.forEach((p) => { if (p.seat !== null && p.seat !== undefined) s.add(p.seat); }); return s; }
 function statusText(st) {
   if (st.state === 'study') { const left = st.left !== undefined ? st.left : Math.max(0, (st.endAt - Date.now()) / 1000); return `📖 ${st.goal ? cleanChat(st.goal, 14) + ' · ' : ''}${Math.ceil(left / 60)}분`; }
-  if (st.state === 'break') return '🍵 쉬는 중';
+  if (st.tea != null) return `🍵 ${st.drink || '차'} 한 잔`;
+  if (st.bed != null) { const m = st.wakeAt ? Math.max(0, Math.ceil((st.wakeAt - Date.now()) / 60000)) : 0; return m ? `💤 ${m}분 뒤 기상` : '💤 쉬는 중'; }
+  if (st.state === 'break') return '🍃 쉬는 중';
   if (st.seat !== null && st.seat !== undefined) return '🪷 자리 잡음';
   return '';
 }
 function syncAvatars(dt, now) {
-  if (now - botsAt > 500) { botsAt = now; bots = botScholars(Date.now(), (net?.peers.size || 0) + 1, takenSeats()); }
+  if (now - botsAt > 500) { botsAt = now; bots = botScholars(Date.now(), (net?.peers.size || 0) + 1, takenSeats(), takenTea(), takenBeds()); }
   const want = new Map();
   net?.peers.forEach((p, id) => {
+    if (p.bed != null && BEDS[p.bed]) { const b = BEDS[p.bed]; want.set(id, { ...p, seated: false, x: b.x, z: b.z, lie: b }); return; }
+    if (p.tea != null && TEA_SEATS[p.tea]) { const t = TEA_SEATS[p.tea]; want.set(id, { ...p, seated: true, sitY: t.y, facing: t.facing, x: t.x, z: t.z, hold: true }); return; }
     const seated = p.seat !== null && p.seat !== undefined;
     const s = seated ? SEATS[p.seat] : null;
     want.set(id, { ...p, seated, x: s ? s.x : p.x, z: s ? s.z : p.z, read: p.state === 'study' });
@@ -154,6 +162,7 @@ function syncAvatars(dt, now) {
     a.update(dt, st, now, camera.position);
     a.studying = st.state === 'study'; a.seatIdx = st.seat;
   });
+  const ub = usedBeds(); world.beds.forEach((b, i) => b.setQuilt(ub.has(i)));
   const line = botLine(Date.now() / 1000, bots);
   if (line && line.slot !== lastLineSlot) { lastLineSlot = line.slot; avatars.get(line.id)?.say(line.text, now, 4000); }
 }
@@ -166,7 +175,7 @@ const PATROL_LEN = PATROL.reduce((s, p, i) => s + Math.hypot(p[0] - PATROL[(i + 
 let hjVisit = null; // { x, z, until, face }
 function hjRoute(sec) {
   const b = bellPhase(sec * 1000);
-  if (b.phase === 'break') { const t = sec / 14; return { x: -4.4 + Math.sin(t) * 0.8, z: 0.4 + Math.cos(t * 0.7) * 0.6, speed: 1.2 }; }
+  if (b.phase === 'break') { const t = TEA_SEATS[0]; return { x: t.x, z: t.z, seated: true, sitY: t.y, facing: t.facing, hold: Math.sin(sec / 4) > -0.2, speed: 3 }; }
   let d = (sec * 0.45) % PATROL_LEN;
   for (let i = 0; i < PATROL.length; i++) {
     const a = PATROL[i], c = PATROL[(i + 1) % PATROL.length], L = Math.hypot(c[0] - a[0], c[1] - a[1]);
@@ -182,7 +191,7 @@ function tickHunjang(dt, now) {
   let st = hjRoute(Date.now() / 1000);
   if (hjVisit && now < hjVisit.until) st = { x: hjVisit.x, z: hjVisit.z, speed: 2.2, facing: hjVisit.face };
   else hjVisit = null;
-  hj.update(dt, { ...st, seated: false, talk: !!hj.bubble }, now, camera.position);
+  hj.update(dt, { seated: false, ...st, talk: !!hj.bubble }, now, camera.position);
 }
 
 // ---------------- 향 (타이머) ----------------
@@ -200,14 +209,14 @@ function syncNote() {
 }
 
 function nearestFreeSeat() {
-  if (!player || player.seat) return null;
+  if (!player || player.seat || player.bed) return null;
   const taken = takenSeats(); avatars.forEach((a) => { if (a.seated && a.seatIdx !== undefined) taken.add(a.seatIdx); });
   let best = null, bd = 1.1;
   SEATS.forEach((s) => { if (taken.has(s.i)) return; const d = Math.hypot(player.pos.x - s.x, player.pos.z - s.z); if (d < bd) { bd = d; best = s; } });
   return best;
 }
 function sit(s) {
-  me.seat = s.i; me.state = 'seat'; player.sitAt(s); pop();
+  me.seat = s.i; me.state = 'seat'; player.sitAt({ ...s, kind: 'hall' }); pop();
   $('seat-label').textContent = `명륜당 ${s.row + 1}열 ${s.col + 1}번 자리`;
   $('goal').value = me.goal || '';
   showDock('goal-card'); syncNote();
@@ -220,6 +229,7 @@ function stand() {
     const mins = Math.floor((Date.now() - me.startAt) / 60000);
     if (mins >= 5) { todayLog().push({ goal: me.goal, mins, at: me.startAt, full: false }); saveMem(); }
     hunjang({ kind: 'leave', goal: me.goal }).then((r) => hjSay(r.text));
+    me.incAlarm?.cancel(); me.incAlarm = null;
   }
   setIncense(me.seat, null);
   me.seat = null; me.state = 'walk'; player.stand(); setFocus(false);
@@ -236,6 +246,7 @@ async function startIncense() {
   me.goal = cleanChat($('goal').value || '오늘의 공부', 30) || '오늘의 공부';
   me.mins = Math.round(mins); me.startAt = Date.now(); me.endAt = me.startAt + mins * 60000; me.state = 'study';
   strike(); setIncense(me.seat, { start: me.startAt, end: me.endAt });
+  me.incAlarm?.cancel(); me.incAlarm = scheduleAlarm(me.endAt, 'incense');
   $('f-goal').textContent = me.goal; showDock('focus-card');
   net?.update();
   hjComeTo(me.seat, 8000);
@@ -247,7 +258,7 @@ function finishIncense() {
   if (me.state !== 'study') return;
   me.state = 'seat';
   todayLog().push({ goal: me.goal, mins: me.mins, at: me.startAt, full: true }); saveMem();
-  chime(); setIncense(me.seat, null); setFocus(false);
+  setIncense(me.seat, null); setFocus(false); me.incAlarm = null;
   net?.update(); net?.lantern({ name: me.name });
   flashLantern(true);
   $('done-sub').textContent = `${me.mins}분 · 오늘 ${me.done}번째 향`;
@@ -265,7 +276,102 @@ $('stop').onclick = stand;
 $('again').onclick = () => { showDock('goal-card'); syncNote(); };
 $('rest').onclick = () => { stand(); me.state = 'break'; net?.update(); hint('은행나무 아래에서 쉬어요 · 훈장님 곁에 가면 고민을 여쭐 수 있어요'); };
 
-function showDock(id) { ['goal-card', 'focus-card', 'done-card'].forEach((k) => $(k).classList.toggle('hidden', k !== id)); }
+function showDock(id) { ['goal-card', 'focus-card', 'done-card', 'tea-card', 'nap-card'].forEach((k) => $(k).classList.toggle('hidden', k !== id)); }
+
+// ---------------- 정자: 차 한 잔 ----------------
+const DRINKS = { 녹차: '쌉싸름하게 정신이 맑아지는 녹차', 보리차: '구수하고 편안한 보리차', 유자차: '달콤새콤 유자차', 대추차: '몸이 따뜻해지는 대추차', 국화차: '향긋하게 눈이 쉬는 국화차', 쌍화차: '든든한 쌍화차 (노른자는 없어요)' };
+function freeTeaSeat() {
+  const used = usedTea(); let best = null, bd = 1e9;
+  TEA_SEATS.forEach((t) => { if (used.has(t.i)) return; const d = Math.hypot(player.pos.x - t.x, player.pos.z - t.z); if (d < bd) { bd = d; best = t; } });
+  return best;
+}
+function openTea() {
+  const t = freeTeaSeat();
+  if (!t) { toast('정자가 꽉 찼어요 · 잠시 뒤에 와요'); return; }
+  me.tea = t.i; me.state = 'tea'; me.drink = '';
+  player.sitAt({ ...t, kind: 'tea' }); pop();
+  $('tea-say').textContent = '어떤 차로 할까요?';
+  showDock('tea-card'); $('tea-ask').classList.toggle('hidden', bellPhase().phase !== 'break');
+  net?.update();
+}
+function pourTea(name) {
+  me.drink = name; player.hold = true; pop();
+  $('tea-say').textContent = `${DRINKS[name]} 한 잔. 천천히 마셔요 🍵`;
+  player.say(`🍵 ${name} 한 잔`, performance.now(), 4000);
+  net?.update();
+  if (bellPhase().phase === 'break' && Math.random() < 0.6) setTimeout(() => hjSay(`${name}라, 잘 골랐구먼. 공부도 차처럼 천천히 우려내는 것이니라.`), 1200);
+}
+function leaveTea() { me.tea = null; me.drink = ''; me.state = 'walk'; player.stand(); showDock(null); net?.update(); }
+document.querySelectorAll('#tea-menu button').forEach((b) => b.onclick = () => pourTea(b.dataset.t));
+$('tea-leave').onclick = leaveTea;
+$('tea-ask').onclick = () => openAsk();
+
+// ---------------- 동재·서재: 낮잠 (알람으로 깨워줌) ----------------
+let napChoice = 20, napTarget = null;
+function nearBedRoom() {
+  if (!player || player.seat || player.bed) return null;
+  const used = usedBeds();
+  let best = null, bd = 1.7;
+  BEDS.forEach((b) => { if (used.has(b.i)) return; const d = Math.hypot(player.pos.x - b.door.x, player.pos.z - b.door.z); if (d < bd) { bd = d; best = b; } });
+  return best;
+}
+document.querySelectorAll('#nap-lens button').forEach((b) => b.onclick = () => {
+  napChoice = b.dataset.m === 'custom' ? 'custom' : Number(b.dataset.m);
+  document.querySelectorAll('#nap-lens button').forEach((x) => x.classList.toggle('on', x === b));
+  $('nap-custom').classList.toggle('hidden', napChoice !== 'custom');
+});
+function openNap(b) { napTarget = b; $('nap-label').textContent = `${b.s > 0 ? '동재' : '서재'} ${b.room + 1}번 방`; showDock('nap-card'); }
+function startNap() {
+  const b = napTarget; if (!b || usedBeds().has(b.i)) { toast('그 자리는 방금 누가 누웠어요'); showDock(null); return; }
+  const mins = napChoice === 'custom' ? Math.max(1, Math.min(120, Number($('nap-custom').value) || 20)) : napChoice;
+  startAudio();
+  me.bed = b.i; me.state = 'nap'; me.wakeAt = Date.now() + mins * 60000; me.napMins = mins;
+  me.napAlarm?.cancel(); me.napAlarm = scheduleAlarm(me.wakeAt, 'nap');
+  player.sleepAt(b); showDock(null);
+  $('sleep').classList.remove('hidden', 'ringing'); $('sleep-title').textContent = '쿨쿨…';
+  $('chatbar').classList.add('hidden');
+  net?.update();
+  toast(`💤 ${mins}분 뒤에 알람으로 깨워줄게요 · 소리를 켜두세요`);
+}
+function tickNap() {
+  if (me.state !== 'nap') return;
+  const left = (me.wakeAt - Date.now()) / 1000;
+  if (left > 0) { $('sleep-time').textContent = fmt(left); document.title = `💤 ${fmt(left)} · 낮잠 중`; return; }
+  if (!$('sleep').classList.contains('ringing')) {
+    $('sleep').classList.add('ringing'); $('sleep-title').textContent = '⏰ 일어날 시간이에요!'; $('sleep-time').textContent = '00:00';
+    document.title = '⏰ 일어날 시간 · 온라인 성균관';
+    try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('온라인 성균관', { body: '⏰ 낮잠 끝! 일어날 시간이에요' }); } catch { /* 무시 */ }
+  }
+}
+function wake() {
+  me.napAlarm?.cancel(); me.napAlarm = null;
+  const slept = me.state === 'nap' ? Math.round((Date.now() - (me.wakeAt - me.napMins * 60000)) / 60000) : 0;
+  me.bed = null; me.wakeAt = 0; me.state = 'walk';
+  player.stand(); $('sleep').classList.add('hidden'); $('chatbar').classList.remove('hidden');
+  document.title = '온라인 성균관 2030';
+  net?.update();
+  if (slept >= 1) toast(`☀️ ${slept}분 푹 쉬었어요 · 기지개 한번 켜고 다시 시작해요`);
+}
+$('nap-start').onclick = startNap;
+$('nap-cancel').onclick = () => showDock(null);
+$('wake').onclick = wake;
+
+// ---------------- 존경각: 지난 두루마리 ----------------
+function openLibrary() {
+  const days = Object.keys(mem.days).filter((d) => mem.days[d]?.length).sort().reverse();
+  const list = $('lib-list'); list.innerHTML = '';
+  if (!days.length) list.innerHTML = '<p class="muted">아직 보관된 두루마리가 없어요. 향을 하나 다 태우면 오늘 두루마리가 생겨요.</p>';
+  days.slice(0, 30).forEach((d) => {
+    const L = mem.days[d], total = L.reduce((a, x) => a + x.mins, 0), lit = L.filter((x) => x.full).length;
+    const b = document.createElement('button'); b.className = 'lib-row';
+    b.innerHTML = `<b>📜 ${d.replace(/-/g, '. ')}</b><span>${Math.floor(total / 60)}시간 ${total % 60}분 · 등불 ${lit}개</span>`;
+    b.onclick = () => { modal('library-modal', false); drawJournal(d); modal('journal-modal', true); };
+    list.appendChild(b);
+  });
+  const all = days.reduce((a, d) => a + mem.days[d].reduce((x, y) => x + y.mins, 0), 0);
+  $('lib-sum').textContent = `지금까지 ${days.length}일 · 모두 ${Math.floor(all / 60)}시간 ${all % 60}분`;
+  modal('library-modal', true);
+}
 
 // 책상 위 향: 모든 자리 (내 것 · 다른 사람 · NPC)
 const incense = new Map(); // seatIdx -> { start, end }
@@ -354,7 +460,8 @@ function tickBell() {
 
 // ---------------- 내 타이머 표시 ----------------
 function tickMyTimer() {
-  if (me.state !== 'study') { if (!document.title.startsWith('🏮')) document.title = '온라인 성균관 2030'; return; }
+  if (me.state === 'nap') return;
+  if (me.state !== 'study') { if (!/^(🏮|⏰)/.test(document.title)) document.title = '온라인 성균관 2030'; return; }
   const left = (me.endAt - Date.now()) / 1000;
   if (left <= 0) { finishIncense(); return; }
   $('f-time').textContent = fmt(left);
@@ -363,7 +470,7 @@ function tickMyTimer() {
   document.title = `🪔 ${fmt(left)} · ${me.goal}`;
 }
 // 다른 창에 있어도 1초마다 확인 (화면은 멈춰도 시간·종은 흐름)
-setInterval(() => { if (!entered) return; tickMyTimer(); tickBell(); }, 1000);
+setInterval(() => { if (!entered) return; tickMyTimer(); tickNap(); tickBell(); }, 1000);
 
 // ---------------- 집중 모드 ----------------
 let focusOn = false, lowPower = mem.lowPower !== false;
@@ -421,9 +528,10 @@ $('season-reset').onclick = () => { themeUntil = 0; applyTheme(realTheme()); mod
 
 // ---------------- 일과 두루마리 ----------------
 $('journal-btn').onclick = () => { drawJournal(); modal('journal-modal', true); };
-async function drawJournal(comment) {
+$('lib-close').onclick = () => modal('library-modal', false);
+async function drawJournal(day = today(), comment) {
   const c = $('journal-canvas'), g = c.getContext('2d'), W = c.width, H = c.height;
-  const list = todayLog();
+  const list = mem.days[day] || [];
   const total = list.reduce((s, x) => s + x.mins, 0);
   g.fillStyle = '#f3ead6'; g.fillRect(0, 0, W, H);
   for (let i = 0; i < 2400; i++) { g.fillStyle = `rgba(150,120,80,${Math.random() * 0.06})`; g.fillRect(Math.random() * W, Math.random() * H, 2, 2); }
@@ -432,7 +540,6 @@ async function drawJournal(comment) {
   const serif = '"Noto Serif KR","Nanum Myeongjo","Batang",serif';
   g.fillStyle = '#2a201a'; g.textAlign = 'center';
   g.font = `800 64px ${serif}`; g.fillText('일과 두루마리', W / 2, 170);
-  const { day } = kst();
   g.font = `600 30px ${serif}`; g.fillStyle = '#6b5a44'; g.fillText(`${day.replace(/-/g, '. ')} · ${me.name}`, W / 2, 222);
   g.textAlign = 'left'; g.fillStyle = '#2a201a';
   let y = 310;
@@ -447,14 +554,14 @@ async function drawJournal(comment) {
   });
   y = Math.max(y + 20, 880);
   g.textAlign = 'center'; g.fillStyle = '#2a201a'; g.font = `800 44px ${serif}`;
-  g.fillText(`오늘 ${Math.floor(total / 60)}시간 ${total % 60}분 · 등불 ${me.done}개`, W / 2, y);
+  g.fillText(`${day === today() ? '오늘' : '이날'} ${Math.floor(total / 60)}시간 ${total % 60}분 · 등불 ${list.filter((x) => x.full).length}개`, W / 2, y);
   g.font = `600 30px ${serif}`; g.fillStyle = '#7a4a24';
   const say = comment || (list.length ? '훈장님이 읽는 중…' : '앉아 있는 것부터가 공부니라.');
   wrapText(g, `훈장님 : ${say}`, W / 2, y + 74, W - 200, 44);
   // 낙관(도장)
   g.fillStyle = '#c92a2a'; g.fillRect(W - 190, H - 200, 96, 96); g.fillStyle = '#f3ead6'; g.font = `800 34px ${serif}`; g.fillText('成均', W - 142, H - 160); g.fillText('館', W - 142, H - 120);
   $('journal-dl').href = c.toDataURL('image/png');
-  if (!comment && list.length) { const r = await hunjang({ kind: 'journal', sessions: list }); drawJournal(r.text); }
+  if (!comment && list.length) { mem.comments = mem.comments || {}; const c = mem.comments[day] || (await hunjang({ kind: 'journal', sessions: list })).text; if (day !== today()) { mem.comments[day] = c; saveMem(); } drawJournal(day, c); }
 }
 function wrapText(g, text, x, y, maxW, lh) { let line = ''; for (const ch of text) { if (g.measureText(line + ch).width > maxW) { g.fillText(line, x, y); y += lh; line = ch; } else line += ch; } g.fillText(line, x, y); }
 
@@ -470,15 +577,26 @@ let actionKind = null;
 function tickAction() {
   if (!player) return;
   let kind = null, label = '';
-  if (!player.seat) {
+  if (!player.seat && !player.bed) {
     const s = nearestFreeSeat();
     const dh = Math.hypot(player.pos.x - hj.group.position.x, player.pos.z - hj.group.position.z);
+    const dp = Math.hypot(player.pos.x - PAVILION.x, player.pos.z - PAVILION.z);
+    const dl = Math.hypot(player.pos.x - (LIBRARY.x + 2.6), player.pos.z - LIBRARY.z);
     if (s) { kind = 'sit'; label = '🪷 방석에 앉기 (E)'; }
     else if (dh < 2.4) { kind = 'ask'; label = '🙇 훈장님께 여쭙기 (E)'; }
+    else if (dp < 3.4) { kind = 'tea'; label = '🍵 정자에서 차 마시기 (E)'; }
+    else if (dl < 2.4) { kind = 'library'; label = '📚 존경각 · 지난 두루마리 (E)'; }
+    else if (nearBedRoom()) { kind = 'nap'; label = '🛏️ 방에 들어가 낮잠 자기 (E)'; }
   }
   if (kind !== actionKind) { actionKind = kind; $('action').classList.toggle('hidden', !kind); $('action').textContent = label; }
 }
-function doAction() { if (actionKind === 'sit') { const s = nearestFreeSeat(); if (s) sit(s); } else if (actionKind === 'ask') openAsk(); }
+function doAction() {
+  if (actionKind === 'sit') { const s = nearestFreeSeat(); if (s) sit(s); }
+  else if (actionKind === 'ask') openAsk();
+  else if (actionKind === 'tea') openTea();
+  else if (actionKind === 'library') openLibrary();
+  else if (actionKind === 'nap') { const b = nearBedRoom(); if (b) openNap(b); }
+}
 $('action').onclick = doAction;
 addEventListener('keydown', (e) => { if (!entered || ['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return; if (e.code === 'KeyE' || e.code === 'Space') { doAction(); e.preventDefault(); } });
 
@@ -516,4 +634,4 @@ tickBell();
 frame();
 
 // 디버그·테스트용
-window.__sgk = { me, world, theme: () => theme, applyTheme, finishIncense, startIncense, sit: (i) => sit(SEATS[i]), stand, setFocus, player: () => player, bots: () => bots, requestTheme, litCount, drawJournal, ask, SEASONS };
+window.__sgk = { openTea, pourTea, leaveTea, openNap, startNap, wake, openLibrary, BEDS, me, world, theme: () => theme, applyTheme, finishIncense, startIncense, sit: (i) => sit(SEATS[i]), stand, setFocus, player: () => player, bots: () => bots, requestTheme, litCount, drawJournal, ask, SEASONS };

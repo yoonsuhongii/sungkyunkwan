@@ -97,3 +97,33 @@ export function pop() {
 export function setVolume(kind, v) { VOL[kind] = v; if (!ac) return; (kind === 'amb' ? ambBus : sfxBus).gain.setTargetAtTime(v, ac.currentTime, 0.1); }
 export function isOn() { return on; }
 export function toggleSound() { on = !on; if (master) master.gain.setTargetAtTime(on ? 0.85 : 0, ac.currentTime, 0.1); return on; }
+
+// ---------------- 알람 예약 ----------------
+// 오디오 시계에 미리 예약해 두므로, 다른 탭에 있어도 정확한 시각에 울림 (휴대폰 화면이 꺼지면 멈출 수 있음)
+export function scheduleAlarm(atMs, kind = 'nap') {
+  if (!ac) return { cancel() {} };
+  const out = ac.createGain(); out.gain.value = 1; out.connect(master);
+  const t0 = ac.currentTime + Math.max(0.05, (atMs - Date.now()) / 1000);
+  const note = (t, f, d, v, type = 'sine') => {
+    const o = ac.createOscillator(), g = ac.createGain(); o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g).connect(out); o.start(t); o.stop(t + d + 0.05);
+  };
+  if (kind === 'nap') {
+    // 낮잠 알람: 맑은 풍경 멜로디가 점점 커지며 30초 동안 반복 (일어나기를 누르면 멈춤)
+    const mel = [784, 988, 1175, 988, 1319, 1175];
+    for (let r = 0; r < 12; r++) {
+      const v = Math.min(0.16, 0.05 + r * 0.012), t = t0 + r * 2.6;
+      mel.forEach((f, i) => note(t + i * 0.22, f, 1.2, v, 'triangle'));
+      note(t, 196, 1.8, v * 0.8);
+    }
+  } else {
+    // 향이 다 탐: 풍경 + 종 한 번씩, 3번
+    for (let r = 0; r < 3; r++) {
+      const t = t0 + r * 3.2;
+      [1568, 2093, 2637].forEach((f, i) => note(t + i * 0.18, f, 2.2, 0.08));
+      [[98, 0.22, 5], [196, 0.12, 4], [294, 0.06, 3]].forEach(([f, v, d]) => note(t + 0.6, f, d, v));
+    }
+  }
+  return { cancel() { try { out.gain.setValueAtTime(0, ac.currentTime); out.disconnect(); } catch { /* 이미 끝남 */ } } };
+}

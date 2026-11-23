@@ -1,7 +1,7 @@
 // 실시간 멀티플레이 (Supabase Realtime: Presence + Broadcast) + 모두에게 똑같이 보이는 NPC 유생
 import { createClient } from '@supabase/supabase-js';
 import { randomScholar, scholarName } from './character.js';
-import { SEATS, BREAK_SPOTS } from './scene.js';
+import { SEATS, BREAK_SPOTS, TEA_SEATS, BEDS } from './scene.js';
 
 const URL = import.meta.env.VITE_SUPABASE_URL;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -10,7 +10,7 @@ export const ONLINE_CAPABLE = !!(URL && KEY);
 
 export function connect(me, { onPeers, onStatus, onSay, onTheme, onLantern }) {
   const peers = new Map();
-  let channel = null, alive = true, lastTrack = 0, pending = null, roomNo = 1;
+  let channel = null, alive = true, lastTrack = 0, pending = null, roomNo = 1, lastKey = '', retry = 0;
   const noop = { peers, update() {}, move() {}, say() {}, theme() {}, lantern() {}, close() {}, room: () => 0 };
   if (!ONLINE_CAPABLE) { onStatus({ online: false, room: 0 }); return noop; }
   const client = createClient(URL, KEY, { realtime: { params: { eventsPerSecond: 20 } } });
@@ -27,7 +27,7 @@ export function connect(me, { onPeers, onStatus, onSay, onTheme, onLantern }) {
           checked = true;
           if (ids.length > CAPACITY) {
             const order = ids.map((id) => ({ id, at: state[id][0]?.online_at || 0 })).sort((a, b) => a.at - b.at);
-            if (order.findIndex((o) => o.id === me.id) >= CAPACITY) { channel.unsubscribe(); join(n + 1); return; }
+            if (order.findIndex((o) => o.id === me.id) >= CAPACITY) { channel.__moving = true; channel.unsubscribe(); join(n + 1); return; }
           }
         }
         const seen = new Set();
@@ -49,18 +49,33 @@ export function connect(me, { onPeers, onStatus, onSay, onTheme, onLantern }) {
       .on('broadcast', { event: 'lantern' }, ({ payload }) => onLantern?.(payload))
       .subscribe(async (status, err) => {
         console.info('[온라인 성균관]', status, err?.message || '');
-        if (status === 'SUBSCRIBED') { await channel.track({ ...me.public(), online_at: me.joinedAt }); onStatus({ online: true, room: n, count: 1 }); }
-        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') onStatus({ online: false, room: n, error: `${status}${err?.message ? ' · ' + err.message : ''}` });
+        if (status === 'SUBSCRIBED') { retry = 0; lastTrack = Date.now(); lastKey = ''; await channel.track({ ...me.public(), online_at: me.joinedAt }); onStatus({ online: true, room: n, count: 1 }); }
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          onStatus({ online: false, room: n, retrying: alive, error: `${status}${err?.message ? ' · ' + err.message : ''}` });
+          if (alive && status === 'CLOSED' && !channel.__moving) { // 서버가 닫았으면 잠시 뒤 다시 들어감
+            const ch = channel; retry++;
+            setTimeout(() => { if (!alive || channel !== ch) return; client.removeChannel(ch); join(n); }, Math.min(15000, 2000 * retry));
+          }
+        }
       });
   }
   join(1);
 
   return {
     peers, room: () => roomNo,
+    // 상태가 바뀔 때만, 최소 3초 간격으로 보냄 (Supabase presence 속도 제한: 너무 자주 보내면 채널이 끊김)
     update() {
       if (!channel || !alive) return;
-      const send = () => { lastTrack = Date.now(); pending = null; channel.track({ ...me.public(), online_at: me.joinedAt }); };
-      if (Date.now() - lastTrack > 300) send(); else if (!pending) pending = setTimeout(send, 320);
+      const pub = me.public();
+      const key = JSON.stringify({ ...pub, x: pub.seat == null ? Math.round(pub.x / 3) : 0, z: pub.seat == null ? Math.round(pub.z / 3) : 0 });
+      if (key === lastKey) return;
+      const send = () => {
+        pending = null; lastTrack = Date.now();
+        const p2 = me.public(); lastKey = JSON.stringify({ ...p2, x: p2.seat == null ? Math.round(p2.x / 3) : 0, z: p2.seat == null ? Math.round(p2.z / 3) : 0 });
+        channel.track({ ...p2, online_at: me.joinedAt });
+      };
+      const wait = 3200 - (Date.now() - lastTrack);
+      if (wait <= 0) send(); else if (!pending) pending = setTimeout(send, wait);
     },
     move(x, z) { channel?.send({ type: 'broadcast', event: 'pos', payload: { id: me.id, x: +x.toFixed(2), z: +z.toFixed(2) } }); },
     say(text) { channel?.send({ type: 'broadcast', event: 'say', payload: { id: me.id, text } }); },
@@ -86,14 +101,15 @@ const GOALS = ['토익 RC 2세트', '미적분 3단원', '자소서 첫 문단',
 const BREAK_LINES = ['아 다리 저려…', '은행잎 진짜 예쁘다', '다음 교시도 화이팅', '훈장님 오늘 기분 좋으신 듯', '매점 가고 싶다', '벌써 한 시간 지났네', '목표 반은 했다!', '물 마시고 와야지', '하늘 좀 봐', '종소리 좋다…', '스트레칭 같이 해요', '오늘 몇 교시째예요?'];
 const STUDY_LINES = ['하아암…', '(사각사각)', '(책장 넘기는 소리)', '음… 이거 뭐였더라', '집중 집중', '(끄덕끄덕)'];
 
-export function botScholars(nowMs, humanCount, takenSeats) {
+const DRINKS = ['녹차', '보리차', '유자차', '대추차', '국화차', '쌍화차'];
+export function botScholars(nowMs, humanCount, takenSeats, takenTea = new Set(), takenBeds = new Set()) {
   const nowSec = nowMs / 1000;
   const want = Math.max(0, Math.min(15, 17 - humanCount));
   const { h: hour, m } = kst(nowMs);
   const bell = bellPhase(nowMs);
   const epoch = Math.floor(nowSec / 3600); // 한 시간마다 유생 몇 명이 바뀜
   const bots = [];
-  const used = new Set();
+  const used = new Set(), usedTea = new Set([0]), usedBed = new Set(); // 0번 찻자리는 훈장님 자리
   for (let i = 0; i < want; i++) {
     const seed = i * 7.7 + Math.floor(epoch / 2 + i * 0.29) * 13.1;
     let k = Math.floor(h(seed) * SEATS.length), tries = 0;
@@ -108,6 +124,23 @@ export function botScholars(nowMs, humanCount, takenSeats) {
     const studyStart = 9, studied = Math.max(0, Math.min(14, hour + m / 60 - studyStart));
     const done = Math.floor(studied * (0.6 + h(seed + 7) * 0.5));
     const goal = GOALS[Math.floor(h(seed + 3) * GOALS.length)];
+    const r9 = h(seed + 9 + epoch * 0.7);
+    if (onBreak && r9 < 0.24) { // 정자에서 차 한 잔
+      const k = 1 + (i % 5);
+      if (!takenTea.has(k) && !usedTea.has(k)) {
+        usedTea.add(k); const t = TEA_SEATS[k];
+        bots.push({ id: `bot-${i}`, bot: true, name, look, seat: null, seated: true, sitY: t.y, facing: t.facing, x: t.x, z: t.z, tea: k, hold: Math.sin(nowSec / 3 + i) > -0.3, talk: Math.sin(nowSec / 2.2 + i) > 0.4, goal, done, state: 'tea', drink: DRINKS[i % DRINKS.length] });
+        continue;
+      }
+    }
+    if (onBreak && r9 >= 0.24 && r9 < 0.34) { // 동재·서재에서 낮잠
+      const k = (i * 5 + epoch) % BEDS.length;
+      if (!takenBeds.has(k) && !usedBed.has(k)) {
+        usedBed.add(k); const b = BEDS[k];
+        bots.push({ id: `bot-${i}`, bot: true, name, look, seat: null, seated: false, x: b.x, z: b.z, lie: b, bed: k, goal, done, state: 'nap', wakeAt: nowMs + bell.left * 1000 });
+        continue;
+      }
+    }
     if (onBreak) {
       const sp = BREAK_SPOTS[(i * 3 + epoch) % BREAK_SPOTS.length];
       const t = nowSec / 9 + i;

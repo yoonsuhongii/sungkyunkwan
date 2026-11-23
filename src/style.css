@@ -118,3 +118,17 @@ body.focusing #topright:hover, body.focusing #hud:hover * { opacity: 1; }
   .ring { width: 92px; height: 92px; }
   .ring-in #f-time { font-size: 21px; }
 }
+
+/* 정자 · 낮잠 · 존경각 */
+.say.plain::before { content: ""; }
+#tea-menu button { font-size: 14px; }
+.sleep { position: fixed; inset: 0; z-index: 12; display: grid; place-items: end center; padding-bottom: max(24px, env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(8, 10, 24, 0) 30%, rgba(8, 10, 24, 0.55)); pointer-events: none; }
+.sleep-card { pointer-events: auto; text-align: center; display: flex; flex-direction: column; gap: 8px; align-items: center; width: min(360px, calc(100vw - 24px)); }
+.sleep-t { font-size: 20px; }
+.sleep-time { font-size: 44px; font-weight: 800; letter-spacing: 0.02em; }
+.sleep.ringing .sleep-card { animation: ring 0.8s ease-in-out infinite alternate; border-color: rgba(240, 201, 106, 0.9); }
+.sleep.ringing { background: rgba(255, 210, 120, 0.18); }
+@keyframes ring { from { box-shadow: var(--hi), 0 0 0 0 rgba(240, 201, 106, 0.0); } to { box-shadow: var(--hi), 0 0 40px 8px rgba(240, 201, 106, 0.55); } }
+.lib-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow: auto; }
+.lib-row { display: flex; justify-content: space-between; gap: 10px; text-align: left; background: rgba(255, 255, 255, 0.08); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font-size: 14px; }
+.lib-row span { color: var(--muted); }
