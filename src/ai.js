@@ -57,22 +57,43 @@ export async function hunjang(args) {
 }
 
 // ---------------- 계절·시간·날씨 프롬프트 ----------------
-const PRESETS = [
-  { k: ['벚꽃', '봄'], t: { title: '벚꽃 핀 봄날', season: 'spring', time: 'day', weather: 'petals' } },
-  { k: ['시험 전날', '시험'], t: { title: '시험 전날 밤', season: 'spring', time: 'night', weather: 'petals' } },
-  { k: ['여름', '매미', '장마'], t: { title: '한여름 장맛비', season: 'summer', time: 'day', weather: 'rain' } },
-  { k: ['비'], t: { title: '비 오는 서원', season: 'summer', time: 'sunset', weather: 'rain' } },
-  { k: ['가을', '은행', '단풍'], t: { title: '은행잎 지는 가을', season: 'autumn', time: 'day', weather: 'leaves' } },
-  { k: ['눈', '겨울', '첫눈', '크리스마스'], t: { title: '눈 내리는 겨울밤', season: 'winter', time: 'night', weather: 'snow' } },
-  { k: ['안개', '몽환'], t: { title: '안개 낀 새벽', season: 'autumn', time: 'dawn', weather: 'fog' } },
-  { k: ['새벽', '아침', '일출'], t: { title: '첫 종 울리는 새벽', season: 'autumn', time: 'dawn', weather: 'clear' } },
-  { k: ['노을', '저녁', '해질'], t: { title: '노을 지는 마당', season: 'autumn', time: 'sunset', weather: 'leaves' } },
-  { k: ['밤', '야간', '별'], t: { title: '별 뜬 밤의 서원', season: 'autumn', time: 'night', weather: 'clear' } },
+// 키워드 → 날씨·효과 (GPT 없이도 "천둥번개"라고 치면 천둥번개가 옴)
+const WEATHER_KEYS = [
+  { k: ['천둥', '번개', '뇌우', '폭풍', '태풍'], w: 'storm' },
+  { k: ['눈보라', '폭설', '블리자드'], w: 'blizzard' },
+  { k: ['눈', '첫눈', '설경'], w: 'snow' },
+  { k: ['비', '장마', '소나기', '장맛비'], w: 'rain' },
+  { k: ['안개', '몽환', '물안개'], w: 'fog' },
+  { k: ['벚꽃', '꽃잎', '꽃비'], w: 'petals' },
+  { k: ['낙엽', '은행잎', '단풍'], w: 'leaves' },
+  { k: ['흐림', '흐린', '구름', '먹구름', '우중충'], w: 'cloudy' },
 ];
+const SEASON_KEYS = [{ k: ['봄', '벚꽃', '꽃'], v: 'spring' }, { k: ['여름', '장마', '매미', '반딧불', '소나기'], v: 'summer' }, { k: ['가을', '단풍', '은행', '낙엽'], v: 'autumn' }, { k: ['겨울', '눈', '크리스마스', '설경', '오로라'], v: 'winter' }];
+const TIME_KEYS = [{ k: ['새벽', '아침', '일출', '해돋이'], v: 'dawn' }, { k: ['노을', '저녁', '해질', '석양', '황혼'], v: 'sunset' }, { k: ['밤', '야간', '별', '달', '오로라', '반딧불', '별똥별', '유성', '자정'], v: 'night' }, { k: ['낮', '점심', '한낮', '맑은'], v: 'day' }];
+const has = (s, list) => list.some((k) => s.includes(k));
 export function offlineTheme(prompt) {
   const s = String(prompt);
-  const hit = PRESETS.find((x) => x.k.some((k) => s.includes(k)));
-  return { ...(hit ? hit.t : { title: s.slice(0, 12) || '맑은 날', season: 'autumn', time: 'day', weather: 'clear' }) };
+  let w = (WEATHER_KEYS.find((x) => has(s, x.k)) || {}).w || 'clear';
+  if (has(s, ['무지개', '갠', '개인']) && w === 'rain') w = 'clear'; // "비 갠 뒤 무지개"는 맑음
+  const season = (SEASON_KEYS.find((x) => has(s, x.k)) || {}).v || (w === 'snow' || w === 'blizzard' ? 'winter' : w === 'petals' ? 'spring' : 'autumn');
+  const time = (TIME_KEYS.find((x) => has(s, x.k)) || {}).v || 'day';
+  const fx = {};
+  if (has(s, ['무지개'])) fx.rainbow = true;
+  if (has(s, ['오로라'])) fx.aurora = true;
+  if (has(s, ['반딧불'])) fx.fireflies = true;
+  if (has(s, ['별똥별', '유성'])) fx.meteors = true;
+  if (has(s, ['바람', '태풍', '강풍'])) fx.wind = 1;
+  if (has(s, ['번개']) && w !== 'storm') fx.lightning = true;
+  return { title: s.slice(0, 14) || '맑은 날', season, time, weather: w, fx };
+}
+function cleanFx(f = {}, prompt = '') {
+  const base = offlineTheme(prompt).fx; // GPT가 빠뜨려도 키워드로 보충
+  const b = (v, k) => !!(v ?? base[k]);
+  const n = (v, k) => (typeof v === 'number' ? Math.max(0, Math.min(1, v)) : base[k]);
+  const out = { rainbow: b(f.rainbow, 'rainbow'), aurora: b(f.aurora, 'aurora'), fireflies: b(f.fireflies, 'fireflies'), meteors: b(f.meteors, 'meteors'), lightning: b(f.lightning, 'lightning') };
+  const wind = n(f.wind, 'wind'), clouds = n(f.clouds, 'clouds');
+  if (wind !== undefined) out.wind = wind; if (clouds !== undefined) out.clouds = clouds;
+  return out;
 }
 export async function makeTheme(prompt) {
   try {
@@ -84,9 +105,28 @@ export async function makeTheme(prompt) {
       title: cleanChat(t.title || prompt, 16),
       season: ['spring', 'summer', 'autumn', 'winter'].includes(t.season) ? t.season : 'autumn',
       time: ['dawn', 'day', 'sunset', 'night'].includes(t.time) ? t.time : 'day',
-      weather: ['clear', 'rain', 'snow', 'fog', 'petals', 'leaves'].includes(t.weather) ? t.weather : 'clear',
+      weather: ['clear', 'cloudy', 'rain', 'storm', 'snow', 'blizzard', 'fog', 'petals', 'leaves'].includes(t.weather) ? t.weather : 'clear',
+      fx: cleanFx(t.fx, prompt),
       ...(sky ? { sky } : {}),
       line: cleanChat(t.line || '', 60),
     };
   } catch { return offlineTheme(prompt); }
+}
+
+// ---------------- NPC 유생 대답 ----------------
+const NPC_OFF = [
+  (n, g) => `저는 ${g} 하다가 잠깐 나왔어요 ㅎㅎ 오늘 몇 교시째세요?`,
+  () => '맞아요, 저도 아까부터 집중이 안 돼서… 은행잎 보니까 좀 낫네요',
+  () => '오 그거 좋다! 다음 종 치면 같이 들어가요',
+  () => '정자에서 유자차 마셔봤어요? 생각보다 맛있어요 🍋',
+  (n, g) => `${g}… 끝이 안 보여요 ㅋㅋ 그래도 오늘 향 두 개는 태웠어요`,
+  () => '힘내요! 여기 앉아만 있어도 반은 한 거래요, 훈장님이 그러셨어요',
+];
+export function offlineNpc({ name = '', goal = '공부', text = '' }) {
+  if (CRISIS.test(text)) return { text: '많이 힘드셨구나… 혼자 버티지 말고 109에 한번 이야기해봐요. 저도 옆에 있을게요.' };
+  return { text: NPC_OFF[Math.floor(Math.random() * NPC_OFF.length)](name, goal) };
+}
+export async function npcReply(args) {
+  try { const r = await post('/api/yusaeng', args, 15000); if (!r?.text) throw new Error('bad'); return { text: cleanChat(r.text, 120) }; }
+  catch { return offlineNpc(args); }
 }

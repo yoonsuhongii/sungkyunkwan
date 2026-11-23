@@ -12,8 +12,8 @@ import { buildWorld, realTheme, softDot, SEATS, FLOOR_Y, SPAWN, TIMES, SEASONS, 
 import { ROBES, HUNJANG_LOOK, scholarName } from './character.js';
 import { Player, Avatar, createInput } from './player.js';
 import { connect, botScholars, botLine, bellPhase, kst, ONLINE_CAPABLE } from './net.js';
-import { hunjang, cleanChat, makeTheme } from './ai.js';
-import { startAudio, setAmbience, tickAmbience, bell as bellSound, strike, pop, toggleSound, setVolume, VOL, scheduleAlarm } from './audio.js';
+import { hunjang, cleanChat, makeTheme, npcReply } from './ai.js';
+import { startAudio, setAmbience, tickAmbience, bell as bellSound, strike, pop, toggleSound, setVolume, VOL, scheduleAlarm, thunder } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
 const qs = new URLSearchParams(location.search);
@@ -53,12 +53,14 @@ let theme = realTheme();
 let themeUntil = 0;
 function applyTheme(th, { by = null, silent = false } = {}) {
   theme = th; world.applyTheme(th);
-  $('theme-pill').textContent = `${th.season === 'winter' ? '❄️' : th.season === 'spring' ? '🌸' : th.season === 'summer' ? '🌿' : '🍂'} ${th.title}`;
-  setAmbience({ night: TIMES[th.time]?.night || 0, rain: th.weather === 'rain' ? 1 : 0 });
+  const icon = { storm: '⛈️', rain: '🌧️', snow: '❄️', blizzard: '🌨️', fog: '🌫️', cloudy: '☁️', petals: '🌸', leaves: '🍂' }[th.weather] || (th.fx?.aurora ? '🌌' : th.fx?.rainbow ? '🌈' : th.time === 'night' ? '🌙' : '☀️');
+  $('theme-pill').textContent = `${icon} ${th.title}`;
+  setAmbience({ night: TIMES[th.time]?.night || 0, rain: th.weather === 'storm' ? 1.4 : th.weather === 'rain' ? 1 : 0, wind: world.fx.fx.wind || 0 });
   bloom.strength = th.time === 'night' ? 0.75 : th.time === 'sunset' || th.time === 'dawn' ? 0.55 : 0.4;
   renderer.toneMappingExposure = th.time === 'night' ? 1.15 : 1.0;
   if (!silent && by) toast(`${by}님이 서원 풍경을 바꿨어요 · ${th.title}`);
 }
+world.fx.onThunder = (d) => thunder(0.25 + d * 2.2, Math.max(0.35, 1 - d * 0.5));
 applyTheme(theme, { silent: true });
 
 // ---------------- 나 ----------------
@@ -105,7 +107,7 @@ function enter() {
   hint('명륜당 마루의 빈 방석으로 가서 앉아보세요 · 이동 WASD/조이스틱 · 시점 드래그');
   net = connect(me, {
     onPeers: () => {}, onStatus,
-    onSay: ({ id, text }) => { const a = avatars.get(id); if (a) a.say(cleanChat(text), performance.now()); },
+    onSay: ({ id, name, text, npc }) => { const t = cleanChat(text); const a = id === 'hunjang' ? hj : avatars.get(id); if (a) a.say(t, performance.now()); logChat(name || a?.name || '유생', t, npc ? 'npc' : 'peer'); },
     onTheme: (t, by) => { if (!t || !t.until || t.until < Date.now() || t.until <= themeUntil) return; themeUntil = t.until; const name = net.peers.get(by)?.name || '누군가'; applyTheme(t, { by: name }); },
     onLantern: ({ id, name }) => { if (id === me.id) return; toast(`🏮 ${cleanChat(name, 12)}님이 향 하나를 다 태웠어요 · 등불이 켜졌어요`); flashLantern(); },
   });
@@ -220,7 +222,6 @@ function sit(s) {
   $('seat-label').textContent = `명륜당 ${s.row + 1}열 ${s.col + 1}번 자리`;
   $('goal').value = me.goal || '';
   showDock('goal-card'); syncNote();
-  $('chatbar').classList.add('hidden');
   net?.update();
   if (!me.greeted) { me.greeted = true; hjComeTo(s.i, 7000); hjSay('자리 잡았구먼. 오늘 할 것 하나만 적고 향을 피우거라.'); }
 }
@@ -233,7 +234,7 @@ function stand() {
   }
   setIncense(me.seat, null);
   me.seat = null; me.state = 'walk'; player.stand(); setFocus(false);
-  showDock(null); $('chatbar').classList.remove('hidden');
+  showDock(null);
   net?.update();
 }
 async function startIncense() {
@@ -329,7 +330,6 @@ function startNap() {
   me.napAlarm?.cancel(); me.napAlarm = scheduleAlarm(me.wakeAt, 'nap');
   player.sleepAt(b); showDock(null);
   $('sleep').classList.remove('hidden', 'ringing'); $('sleep-title').textContent = '쿨쿨…';
-  $('chatbar').classList.add('hidden');
   net?.update();
   toast(`💤 ${mins}분 뒤에 알람으로 깨워줄게요 · 소리를 켜두세요`);
 }
@@ -347,7 +347,7 @@ function wake() {
   me.napAlarm?.cancel(); me.napAlarm = null;
   const slept = me.state === 'nap' ? Math.round((Date.now() - (me.wakeAt - me.napMins * 60000)) / 60000) : 0;
   me.bed = null; me.wakeAt = 0; me.state = 'walk';
-  player.stand(); $('sleep').classList.add('hidden'); $('chatbar').classList.remove('hidden');
+  player.stand(); $('sleep').classList.add('hidden');
   document.title = '온라인 성균관 2030';
   net?.update();
   if (slept >= 1) toast(`☀️ ${slept}분 푹 쉬었어요 · 기지개 한번 켜고 다시 시작해요`);
@@ -489,8 +489,44 @@ $('chatbar').addEventListener('submit', (e) => {
   e.preventDefault();
   const t = cleanChat($('chat').value); if (!t) return;
   $('chat').value = '';
-  player.say(t, performance.now()); net?.say(t);
+  player.say(t, performance.now()); net?.say(t); logChat(me.name, t, 'me');
+  maybeNpcAnswer(t);
 });
+// 대화 기록 (화면 오른쪽 아래, 잠깐 보였다가 흐려짐)
+const chatHist = [];
+function logChat(name, text, kind) {
+  chatHist.push(`${name}: ${text}`);
+  const d = document.createElement('div'); d.className = `cl ${kind}`;
+  d.innerHTML = '<b></b><span></span>'; d.firstChild.textContent = name; d.lastChild.textContent = text;
+  const box = $('chatlog'); box.appendChild(d); while (box.children.length > 30) box.firstChild.remove();
+  box.scrollTop = 1e6; box.classList.add('live'); clearTimeout(logChat.t); logChat.t = setTimeout(() => box.classList.remove('live'), 15000);
+}
+// 근처 NPC 유생(또는 훈장님)이 대답 — 실제 사람과도, NPC와도 이야기할 수 있게
+let npcBusy = 0;
+async function maybeNpcAnswer(text) {
+  if (!player || Date.now() < npcBusy) return;
+  const dh = Math.hypot(player.pos.x - hj.group.position.x, player.pos.z - hj.group.position.z);
+  if (dh < 4) {
+    npcBusy = Date.now() + 6000;
+    const r = await hunjang({ kind: 'ask', question: text, goal: me.goal });
+    hjSay(r.text, 9000); logChat('훈장님', r.text, 'npc'); net?.npcSay('hunjang', '훈장님', r.text); return;
+  }
+  let best = null, bd = 7;
+  bots.forEach((b) => { if (b.state === 'study' || b.state === 'nap') return; const a = avatars.get(b.id); if (!a) return; const d = a.group.position.distanceTo(player.pos); if (d < bd) { bd = d; best = b; } });
+  if (!best) return;
+  npcBusy = Date.now() + 5000;
+  const place = best.state === 'tea' ? '정자에서 차 마시는 중' : '은행나무 마당에서 쉬는 중';
+  await new Promise((r) => setTimeout(r, 700));
+  const r = await npcReply({ name: best.name, goal: best.goal, place, from: me.name, text, history: chatHist.slice(-6) });
+  avatars.get(best.id)?.say(r.text, performance.now(), 7000);
+  logChat(best.name, r.text, 'npc'); net?.npcSay(best.id, best.name, r.text);
+}
+function updateChatbar() {
+  const quiet = me.state === 'study' || me.state === 'nap' || !entered;
+  $('chatbar').classList.toggle('hidden', quiet);
+  $('chatlog').classList.toggle('hidden', !entered || me.state === 'nap');
+  $('chatlog').classList.toggle('quiet', me.state === 'study');
+}
 
 // ---------------- 훈장님께 여쭙기 ----------------
 const askHist = [];
@@ -517,9 +553,11 @@ async function requestTheme(prompt) {
   modal('season-modal', false); toast('🍃 하늘에 부탁하는 중…');
   const t = await makeTheme(prompt);
   themeUntil = Date.now() + 10 * 60000;
-  applyTheme(t);
+  applyTheme(t); player?.lookUp(6000);
   toast(`풍경이 바뀌었어요 · ${t.title}`);
-  if (t.line) hjSay(t.line);
+  const LINES = { storm: '허허, 하늘이 북을 치는구먼. 이런 날은 마루가 제일 아늑하니라.', rain: '빗소리에 글 읽기 좋은 날이로다.', snow: '눈이 오니 마음도 고요해지는구먼.', blizzard: '눈보라가 매섭구나. 다들 안으로 들거라.', fog: '안개 속에서는 한 걸음씩만 보면 되느니라.' };
+  const ln = t.line || LINES[t.weather] || (t.fx?.aurora ? '하늘에 비단 휘장이 걸렸구먼!' : t.fx?.rainbow ? '비 갠 뒤 무지개라, 좋은 징조로다.' : '');
+  if (ln) hjSay(ln);
   net?.theme({ ...t, until: themeUntil, by: me.id }); net?.update();
 }
 $('season-form').addEventListener('submit', (e) => { e.preventDefault(); requestTheme($('season-in').value); $('season-in').value = ''; });
@@ -616,14 +654,14 @@ function frame() {
   } else {
     player.update(rdt, input.poll(), camera, now);
     if (!player.seat && now - lastMove > 100 && player.walking) { lastMove = now; net?.move(player.pos.x, player.pos.z); }
-    tickAction();
+    tickAction(); updateChatbar();
   }
   syncAvatars(rdt, now);
   tickHunjang(rdt, now);
   tickIncense(rdt, now);
   tickSparks(rdt);
   world.setLit(litCount());
-  world.update(rdt, now, camera.position);
+  world.update(rdt, now, camera.position, camera);
   world.tickBell(rdt);
   tickAmbience(rdt);
   if (themeUntil && Date.now() > themeUntil && !theme.real) { themeUntil = 0; applyTheme(realTheme()); toast('풍경이 지금 실제 계절·시각으로 돌아왔어요'); }

@@ -11,7 +11,7 @@ export const ONLINE_CAPABLE = !!(URL && KEY);
 export function connect(me, { onPeers, onStatus, onSay, onTheme, onLantern }) {
   const peers = new Map();
   let channel = null, alive = true, lastTrack = 0, pending = null, roomNo = 1, lastKey = '', retry = 0;
-  const noop = { peers, update() {}, move() {}, say() {}, theme() {}, lantern() {}, close() {}, room: () => 0 };
+  const noop = { peers, update() {}, move() {}, say() {}, npcSay() {}, theme() {}, lantern() {}, close() {}, room: () => 0 };
   if (!ONLINE_CAPABLE) { onStatus({ online: false, room: 0 }); return noop; }
   const client = createClient(URL, KEY, { realtime: { params: { eventsPerSecond: 20 } } });
 
@@ -78,7 +78,8 @@ export function connect(me, { onPeers, onStatus, onSay, onTheme, onLantern }) {
       if (wait <= 0) send(); else if (!pending) pending = setTimeout(send, wait);
     },
     move(x, z) { channel?.send({ type: 'broadcast', event: 'pos', payload: { id: me.id, x: +x.toFixed(2), z: +z.toFixed(2) } }); },
-    say(text) { channel?.send({ type: 'broadcast', event: 'say', payload: { id: me.id, text } }); },
+    say(text) { channel?.send({ type: 'broadcast', event: 'say', payload: { id: me.id, name: me.name, text } }); },
+    npcSay(id, name, text) { channel?.send({ type: 'broadcast', event: 'say', payload: { id, name, text, npc: true } }); },
     theme(t) { channel?.send({ type: 'broadcast', event: 'theme', payload: t }); },
     lantern(p) { channel?.send({ type: 'broadcast', event: 'lantern', payload: { id: me.id, ...p } }); },
     close() { alive = false; channel?.unsubscribe(); },

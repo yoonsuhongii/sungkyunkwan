@@ -24,11 +24,11 @@ export function startAudio() {
     rainG = ac.createGain(); rainG.gain.value = 0; r.connect(bp).connect(rainG).connect(ambBus); r.start();
   } catch { ac = null; }
 }
-export function setAmbience({ night: n = 0, rain: r = 0 } = {}) {
+export function setAmbience({ night: n = 0, rain: r = 0, wind: w = 0 } = {}) {
   night = n; rain = r;
   if (!ac) return;
-  rainG.gain.setTargetAtTime(r * 0.14, ac.currentTime, 1);
-  windG.gain.setTargetAtTime(0.12 + r * 0.08, ac.currentTime, 1);
+  rainG.gain.setTargetAtTime(r * 0.16, ac.currentTime, 1);
+  windG.gain.setTargetAtTime(0.12 + r * 0.06 + w * 0.35, ac.currentTime, 1);
 }
 // 새소리·풀벌레는 가끔씩 (메인 루프에서 호출)
 export function tickAmbience(dt) {
@@ -126,4 +126,16 @@ export function scheduleAlarm(atMs, kind = 'nap') {
     }
   }
   return { cancel() { try { out.gain.setValueAtTime(0, ac.currentTime); out.disconnect(); } catch { /* 이미 끝남 */ } } };
+}
+
+// 천둥: 낮게 우르릉 (거리에 따라 늦고 작게)
+export function thunder(delaySec = 0.6, power = 1) {
+  if (!ac || !on) return;
+  const t = ac.currentTime + delaySec;
+  const s = ac.createBufferSource(); s.buffer = noiseBuf(4, true);
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(120, t + 3);
+  const g = ac.createGain(); const v = 0.9 * power;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + 0.06);
+  g.gain.exponentialRampToValueAtTime(v * 0.45, t + 0.5); g.gain.linearRampToValueAtTime(v * 0.6, t + 0.9); g.gain.exponentialRampToValueAtTime(0.0001, t + 3.8);
+  s.connect(lp).connect(g).connect(sfxBus); s.start(t); s.stop(t + 4);
 }

@@ -106,9 +106,12 @@ export class Player {
     tickBubble(this, now);
 
     // 카메라: 앉으면 어깨 너머로 책상과 마당이 보이게
+    // 날씨가 바뀌면 잠깐 하늘을 올려다봄
+    if (this.skyUntil && now < this.skyUntil) { this.pitch += (-0.12 - this.pitch) * Math.min(1, dt * 2); this.dist += (8 - this.dist) * Math.min(1, dt * 2); }
+    else if (this.skyUntil) { this.skyUntil = 0; this.pitch = this.savedPitch ?? 0.32; this.dist = this.savedDist ?? 6.5; }
     const sf = this.seat ? (this.seat.facing ?? 0) : 0;
     const sdir = new THREE.Vector3(Math.sin(sf), 0, Math.cos(sf));
-    if ((this.seat || this.bed) && !this.freeLook) {
+    if ((this.seat || this.bed) && !this.freeLook && !this.skyUntil) {
       const want = this.bed ? { yaw: -this.bed.s * Math.PI / 2 - 0.25, pitch: 0.5, dist: 2.7 }
         : this.focus ? { yaw: sf + Math.PI, pitch: 0.72, dist: 1.55 }
         : this.seat.kind === 'tea' ? { yaw: sf + Math.PI + 0.95, pitch: 0.34, dist: 2.7 } : { yaw: sf + Math.PI + 0.5, pitch: 0.55, dist: 3.4 };
@@ -208,7 +211,7 @@ export function createInput(canvas, player) {
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
     player.yaw -= dx * 0.006; if (player.seat && drag.moved > 20) player.freeLook = true;
-    player.pitch = THREE.MathUtils.clamp(player.pitch + dy * 0.004, 0.02, 1.2);
+    player.pitch = THREE.MathUtils.clamp(player.pitch + dy * 0.004, -0.4, 1.2); player.skyUntil = 0;
   });
   const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
   window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
@@ -241,3 +244,6 @@ export function createInput(canvas, player) {
   };
   return input;
 }
+
+// 하늘 보기: 잠깐 고개를 들었다가 원래대로
+Player.prototype.lookUp = function (ms = 5000) { if (!this.skyUntil) { this.savedPitch = this.pitch; this.savedDist = this.dist; } this.skyUntil = performance.now() + ms; };

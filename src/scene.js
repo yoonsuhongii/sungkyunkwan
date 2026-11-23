@@ -1,6 +1,7 @@
 // 온라인 성균관 — 공간(월드) 빌더
 // 명륜당(공부 마루) · 은행나무 마당 · 동재/서재 · 담장과 정문 · 종각 · 등불 줄 · 계절/시간/날씨
 import * as THREE from 'three';
+import { buildFx } from './fx.js';
 
 // ---------------- 배치 상수 ----------------
 export const FLOOR_Y = 0.9;
@@ -563,6 +564,7 @@ export function buildWorld(scene, { high = true } = {}) {
 
   // ---------------- 상태 ----------------
   const state = { theme: null, cur: null, glow: 0, lit: 0, weather: 'clear', night: 0 };
+  const fx = buildFx(scene, { high });
   const tmp = new THREE.Color();
   const roofs = [];
   scene.traverse((o) => { if (o.userData?.top) roofs.push(o.userData.top); });
@@ -590,36 +592,46 @@ export function buildWorld(scene, { high = true } = {}) {
     const w = state.weather;
     wMat.color.set(w === 'rain' ? '#a8c4e8' : w === 'petals' ? '#ffc2d6' : w === 'leaves' ? '#ffd43b' : '#ffffff');
     wMat.size = w === 'rain' ? 0.06 : w === 'petals' || w === 'leaves' ? 0.18 : 0.12;
-    weatherPts.visible = ['rain', 'snow', 'petals', 'leaves'].includes(w);
+    weatherPts.visible = ['snow', 'blizzard', 'petals', 'leaves'].includes(w);
+    fx.apply(th);
     for (let i = 0; i < NP; i++) {
-      const v = w === 'rain' ? [0, -16 - rnd() * 4, 0] : w === 'snow' ? [(rnd() - 0.5) * 0.6, -0.8 - rnd() * 0.6, (rnd() - 0.5) * 0.6] : [(rnd() - 0.2) * 1.2, -0.7 - rnd() * 0.5, (rnd() - 0.5) * 1];
+      const v = w === 'blizzard' ? [6 + rnd() * 4, -2.5 - rnd() * 1.5, (rnd() - 0.5) * 2] : w === 'snow' ? [(rnd() - 0.5) * 0.6, -0.8 - rnd() * 0.6, (rnd() - 0.5) * 0.6] : [(rnd() - 0.2) * 1.2, -0.7 - rnd() * 0.5, (rnd() - 0.5) * 1];
       wVel.set(v, i * 3);
     }
   }
 
   const lerpC = (c, to, k) => c.lerp(tmp.set(to), k);
-  function update(dt, now, camPos) {
+  const flashLight = new THREE.AmbientLight('#dfe6ff', 0); scene.add(flashLight);
+  const _look = new THREE.Vector3();
+  function update(dt, now, camPos, cam) {
     const tg = state.target; if (!tg) return;
     const { T, S } = tg; const k = Math.min(1, dt * 1.5);
+    const c0 = camPos || new THREE.Vector3();
+    const F = fx.update(dt, now, c0, state.night, T.sky[2], cam ? cam.getWorldDirection(_look) : null);
+    flashLight.intensity = F.flash * F.flash * 4;
+    const dim = Math.max(0, F.clouds - 0.4) / 0.6; // 0~1: 먹구름 정도
     const sk = tg.sky ? [tg.sky[0], new THREE.Color(tg.sky[0]).lerp(new THREE.Color(tg.sky[1]), 0.6), tg.sky[1]] : T.sky;
     const U = sky.mat.uniforms;
-    lerpC(U.top.value, sk[0], k); lerpC(U.mid.value, sk[1], k); lerpC(U.bottom.value, sk[2], k);
-    lerpC(U.glowC.value, T.glow[0], k); U.glow.value += (T.glow[1] * (state.weather === 'rain' || state.weather === 'fog' ? 0.3 : 1) - U.glow.value) * k;
+    const grey = state.night > 0.6 ? '#0c0f16' : '#4b525e';
+    const mixG = (c) => new THREE.Color(c).lerp(new THREE.Color(grey), dim * 0.85).lerp(new THREE.Color('#e8ecff'), F.flash * 0.8);
+    lerpC(U.top.value, mixG(sk[0]), F.flash ? 1 : k); lerpC(U.mid.value, mixG(sk[1]), F.flash ? 1 : k); lerpC(U.bottom.value, mixG(sk[2]), F.flash ? 1 : k);
+    lerpC(U.glowC.value, T.glow[0], k); U.glow.value += (T.glow[1] * (1 - dim * 0.9) * (state.weather === 'fog' ? 0.3 : 1) - U.glow.value) * k;
     U.sunDir.value.set(...T.sun).normalize();
     const fogC = state.weather === 'fog' ? '#c8ccd0' : T.fog;
     lerpC(scene.fog.color, fogC, k);
-    scene.fog.near += ((state.weather === 'fog' ? 8 : state.weather === 'rain' ? 30 : 60) - scene.fog.near) * k;
-    scene.fog.far += ((state.weather === 'fog' ? 70 : state.weather === 'rain' ? 160 : 320) - scene.fog.far) * k;
-    lerpC(sun.color, T.sunC, k); sun.intensity += ((state.weather === 'rain' || state.weather === 'fog' ? T.sunI * 0.45 : T.sunI) - sun.intensity) * k;
+    const fogN = state.weather === 'fog' ? 8 : state.weather === 'blizzard' ? 6 : 60 - dim * 35, fogF = state.weather === 'fog' ? 70 : state.weather === 'blizzard' ? 55 : 320 - dim * 170;
+    scene.fog.near += (fogN - scene.fog.near) * k; scene.fog.far += (fogF - scene.fog.far) * k;
+    if (dim > 0) scene.fog.color.lerp(tmp.set(grey), dim * 0.5 * k);
+    lerpC(sun.color, T.sunC, k); sun.intensity += (T.sunI * (1 - dim * 0.7) * (state.weather === 'fog' ? 0.45 : 1) - sun.intensity) * k;
     const sd = new THREE.Vector3(...T.sun).normalize();
     const c = camPos || new THREE.Vector3();
     sun.position.set(c.x * 0 + sd.x * 60, sd.y * 60, sd.z * 60); sun.target.position.set(0, 0, -2);
-    lerpC(hemi.color, T.hemi[0], k); lerpC(hemi.groundColor, T.hemi[1], k); hemi.intensity += (T.hemi[2] - hemi.intensity) * k;
+    lerpC(hemi.color, T.hemi[0], k); lerpC(hemi.groundColor, T.hemi[1], k); hemi.intensity += (T.hemi[2] * (1 - dim * 0.35) - hemi.intensity) * k; hemi.intensity += F.flash * 2.5 * (F.flash > 0.5 ? 1 : 0.4) * k;
     state.night += (T.night - state.night) * k;
     const n = state.night;
     scene.environmentIntensity = 0.25 - 0.19 * n;
-    sky.stars.material.opacity = Math.max(0, n - 0.3) * (state.weather === 'clear' || state.weather === 'leaves' ? 1 : 0.2);
-    sky.orb.position.copy(sd).multiplyScalar(520); sky.orb.material.color.set(n > 0.6 ? '#dfe8ff' : T.sunC); sky.orb.material.opacity = state.weather === 'rain' || state.weather === 'fog' ? 0.2 : 0.95;
+    sky.stars.material.opacity = Math.max(0, n - 0.3) * (1 - Math.min(1, F.clouds * 1.3));
+    sky.orb.position.copy(sd).multiplyScalar(520); sky.orb.material.color.set(n > 0.6 ? '#dfe8ff' : T.sunC); sky.orb.material.opacity = 0.95 * (1 - Math.min(0.85, dim));
     sky.orb.scale.setScalar(n > 0.6 ? 46 : 80);
     hillMat.color.copy(tmp.set('#4a6a5a').lerp(new THREE.Color(T.fog), 0.45 + n * 0.2));
     lerpC(M.ground.color, S.snow ? '#ffffff' : '#ffffff', k); lerpC(M.grass.color, S.grass, k);
@@ -634,15 +646,16 @@ export function buildWorld(scene, { high = true } = {}) {
       const fl = 0.9 + Math.sin(now / 300 + u.phase) * 0.1;
       u.body.material.emissiveIntensity = 0.05 + u.lit * (0.8 + n * 1.6) * fl;
       u.capM.emissiveIntensity = 0.02 + u.lit * 0.4;
-      l.rotation.z = Math.sin(now / 900 + u.phase) * 0.06;
+      l.rotation.z = Math.sin(now / (900 - F.wind * 500) + u.phase) * (0.06 + F.wind * 0.22);
     });
+    ginkgos.forEach((gk, gi) => { gk.group.rotation.z = Math.sin(now / 1100 + gi) * 0.012 * (0.3 + F.wind * 3); gk.group.rotation.x = Math.cos(now / 1300 + gi) * 0.008 * (0.3 + F.wind * 3); });
     const litFrac = Math.min(1, state.lit / lanterns.length);
     stoneLamps.forEach((b) => { b.material.emissiveIntensity = (0.3 + litFrac) * (0.3 + n * 1.4); });
     lampLight.intensity = n * (2 + litFrac * 10);
     // 날씨 입자 이동 (카메라 주변)
     if (weatherPts.visible) {
       const p = wGeo.attributes.position.array, s = dt;
-      const wob = state.weather === 'petals' || state.weather === 'leaves' || state.weather === 'snow';
+      const wob = state.weather !== 'blizzard';
       for (let i = 0; i < NP; i++) {
         const j = i * 3;
         p[j] += wVel[j] * s + (wob ? Math.sin(now / 700 + i) * 0.01 : 0); p[j + 1] += wVel[j + 1] * s; p[j + 2] += wVel[j + 2] * s;
@@ -655,5 +668,5 @@ export function buildWorld(scene, { high = true } = {}) {
   function ringBell() { bellG.userData.swing = 1; }
   function tickBell(dt) { const s = bellG.userData.swing || 0; if (s > 0.001) { bellPivot.rotation.x = Math.sin(performance.now() / 260) * 0.18 * s; bellG.userData.swing = s * Math.pow(0.4, dt); } }
 
-  return { sun, hemi, hallLights, desks, beds, lanterns, ginkgos, applyTheme, update, setLit, ringBell, tickBell, state, LANTERN_COUNT: lanterns.length };
+  return { fx, sun, hemi, hallLights, desks, beds, lanterns, ginkgos, applyTheme, update, setLit, ringBell, tickBell, state, LANTERN_COUNT: lanterns.length };
 }
