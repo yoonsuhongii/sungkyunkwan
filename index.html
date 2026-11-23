@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>온라인 성균관 2030</title>
+  <meta name="description" content="혼자 공부하기 외로운 날, 명륜당 마루에 같이 앉아요. 2030 월드모델 파일럿." />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@600;800&display=swap" />
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <!-- 입학 화면 -->
+  <div id="intro" class="overlay">
+    <div class="card intro">
+      <div class="kicker">2030 미래콘텐츠 · 월드모델 파일럿</div>
+      <h1 class="serif">온라인 성균관</h1>
+      <p class="lead">혼자 공부하기 외로운 날,<br />600년 된 명륜당 마루에 같이 앉아요.</p>
+      <label class="field">이름
+        <div class="row"><input id="my-name" maxlength="12" autocomplete="off" /><button id="reroll" class="ghost small" title="다른 이름">🎲</button></div>
+      </label>
+      <div class="field">도포 색<div id="robes" class="swatches"></div></div>
+      <div class="field">머리
+        <div id="hats" class="seg">
+          <button data-v="yugeon" class="on">유건</button><button data-v="gat">갓</button><button data-v="none">맨머리</button>
+        </div>
+      </div>
+      <button id="enter" class="primary">입학하기</button>
+      <p class="tiny muted">공부 기록은 이 기기에만 저장돼요. 다른 사람에게는 이름·옷·목표·남은 시간만 보여요.</p>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="status" class="pill">연결 중…</div>
+    <div id="bell-pill" class="pill bell"></div>
+    <div id="lantern-pill" class="pill"></div>
+    <div id="theme-pill" class="pill dim"></div>
+  </div>
+  <div id="topright" class="hidden">
+    <button id="snd" class="round" title="소리">🔊</button>
+    <button id="season-btn" class="round" title="계절·날씨 바꾸기">🍂</button>
+    <button id="journal-btn" class="round" title="일과 두루마리">📜</button>
+    <button id="settings-btn" class="round" title="설정">⚙️</button>
+  </div>
+  <div id="hint" class="hint hidden"></div>
+  <button id="action" class="action hidden"></button>
+  <div id="joy" class="hidden"><div id="joy-knob"></div></div>
+  <div id="toast" class="toast"></div>
+
+  <!-- 자리에 앉으면: 오늘의 목표 + 향 길이 -->
+  <div id="goal-card" class="card dock hidden">
+    <div class="dock-h"><b class="serif">향 피우기</b><span class="muted tiny" id="seat-label"></span></div>
+    <input id="goal" maxlength="30" placeholder="오늘 이 향 동안 할 것 (예: 토익 RC 2세트)" autocomplete="off" />
+    <div class="seg" id="lens">
+      <button data-m="25">25분</button><button data-m="50" class="on">50분</button><button data-m="90">90분</button><button data-m="custom">직접</button>
+    </div>
+    <input id="len-custom" class="hidden" type="number" min="1" max="180" value="40" inputmode="numeric" />
+    <label class="check"><input type="checkbox" id="sync" /> <span>정각 종에 맞추기 <small class="muted" id="sync-note"></small></span></label>
+    <div class="row end">
+      <button id="stand" class="ghost">일어나기</button>
+      <button id="start" class="primary">🪔 향 피우기</button>
+    </div>
+  </div>
+
+  <!-- 공부 중 -->
+  <div id="focus-card" class="card dock focus hidden">
+    <div class="ring">
+      <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" class="track" /><circle id="ring-fg" cx="60" cy="60" r="52" class="fg" /></svg>
+      <div class="ring-in"><div id="f-time" class="serif">50:00</div><div class="tiny muted" id="f-sub">남은 향</div></div>
+    </div>
+    <div class="focus-r">
+      <div class="tiny muted">지금 하는 것</div>
+      <div id="f-goal" class="f-goal"></div>
+      <div class="row">
+        <button id="focus-btn" class="ghost small">🌙 집중 모드</button>
+        <button id="stop" class="ghost small">그만하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 향이 다 탔을 때 -->
+  <div id="done-card" class="card dock hidden">
+    <div class="dock-h"><b class="serif">향이 다 탔어요</b><span id="done-sub" class="muted tiny"></span></div>
+    <div id="done-say" class="say"></div>
+    <div class="row end">
+      <button id="again" class="ghost">한 번 더</button>
+      <button id="rest" class="primary">🍃 마당에서 쉬기</button>
+    </div>
+  </div>
+
+  <!-- 쉬는 시간 대화 -->
+  <form id="chatbar" class="chatbar hidden" autocomplete="off">
+    <input id="chat" maxlength="60" placeholder="쉬는 시간 한마디 (공부 중엔 꺼져요)" />
+    <button class="ghost small">보내기</button>
+  </form>
+
+  <!-- 훈장님께 여쭙기 -->
+  <div id="ask-panel" class="panel hidden">
+    <header><b class="serif">훈장님께 여쭙기</b><button id="ask-close" class="ghost small">닫기</button></header>
+    <div id="ask-log" class="log"></div>
+    <div class="chips" id="ask-chips">
+      <button>집중이 안 돼요</button><button>뭐부터 할지 모르겠어요</button><button>계속 미루게 돼요</button><button>너무 지쳤어요</button>
+    </div>
+    <form id="ask-form" class="ask"><input id="ask-in" maxlength="120" placeholder="공부 고민을 여쭤보세요" autocomplete="off" /><button class="primary small">여쭙기</button></form>
+  </div>
+
+  <!-- 계절·날씨 -->
+  <div id="season-modal" class="overlay hidden">
+    <div class="card modal">
+      <div class="dock-h"><b class="serif">오늘의 서원 풍경</b><button class="ghost small x">닫기</button></div>
+      <p class="muted tiny">원하는 분위기를 쓰면 성균관의 계절·시간·날씨가 바뀌어요. 같은 방 모두에게 10분간 보여요.</p>
+      <form id="season-form" class="ask"><input id="season-in" maxlength="40" placeholder="예: 눈 내리는 겨울밤, 시험 전날 벚꽃" autocomplete="off" /><button class="primary small">바꾸기</button></form>
+      <div class="chips"><button>첫눈 오는 밤</button><button>벚꽃 핀 봄날</button><button>장맛비 오는 여름</button><button>안개 낀 새벽</button><button>노을 지는 마당</button></div>
+      <button id="season-reset" class="ghost small">↺ 지금 실제 시각·계절로</button>
+    </div>
+  </div>
+
+  <!-- 일과 두루마리 -->
+  <div id="journal-modal" class="overlay hidden">
+    <div class="card modal journal">
+      <div class="dock-h"><b class="serif">오늘의 일과 두루마리</b><button class="ghost small x">닫기</button></div>
+      <canvas id="journal-canvas" width="900" height="1200"></canvas>
+      <div class="row end"><a id="journal-dl" class="primary small" download="일과두루마리.png">이미지로 저장</a></div>
+    </div>
+  </div>
+
+  <!-- 설정 -->
+  <div id="settings-modal" class="overlay hidden">
+    <div class="card modal">
+      <div class="dock-h"><b class="serif">설정</b><button class="ghost small x">닫기</button></div>
+      <label class="field">바람·새소리 <input id="vol-amb" type="range" min="0" max="1" step="0.05" /></label>
+      <label class="field">종·풍경 소리 <input id="vol-sfx" type="range" min="0" max="1" step="0.05" /></label>
+      <label class="check"><input type="checkbox" id="low-power" /> <span>집중 모드에서 화면을 아주 느리게 그리기 (배터리 절약)</span></label>
+      <div class="row"><a class="ghost small" href="?q=high">고화질</a><a class="ghost small" href="?q=low">가볍게</a></div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
